@@ -371,6 +371,44 @@ def health():
     return {"status": "ok", "version": "2.0.0"}
 
 
+@app.post("/preview/snapshot")
+async def stream_snapshot(req: StreamRequest):
+    """Grab a single frame from any stream URL for layout preview."""
+    import tempfile
+    snap_path = tempfile.mktemp(suffix=".jpg")
+    try:
+        # Resolve via streamlink
+        resolve = subprocess.run(
+            ["streamlink", req.url, "best", "--stream-url"],
+            capture_output=True, text=True, timeout=20
+        )
+        if resolve.returncode != 0:
+            raise HTTPException(400, "Could not resolve stream — is it live?")
+
+        stream_url = resolve.stdout.strip()
+
+        # Grab single frame via ffmpeg
+        result = subprocess.run([
+            "ffmpeg", "-y",
+            "-i", stream_url,
+            "-vframes", "1",
+            "-q:v", "2",
+            snap_path
+        ], capture_output=True, timeout=20)
+
+        if not os.path.exists(snap_path):
+            raise HTTPException(500, "Could not capture frame")
+
+        return FileResponse(snap_path, media_type="image/jpeg")
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Stream took too long to respond")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.post("/clip/stream")
 def start_stream(req: StreamRequest, background_tasks: BackgroundTasks):
     """Start monitoring a live stream URL."""
